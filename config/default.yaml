@@ -1,0 +1,5 @@
+# Placeholder configuration. Parsing and CLI integration arrive in later phases.
+algorithm: fcfs
+cores: 1
+processes: 10
+seed: 42
