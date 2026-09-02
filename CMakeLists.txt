@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(multicore_cpu_scheduler VERSION 0.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -17,6 +17,9 @@ add_library(scheduler_core
     schedulers/round_robin.cpp
     schedulers/priority.cpp
     schedulers/mlfq.cpp
+    src/workload.cpp
+    src/benchmark.cpp
+    src/csv_export.cpp
 )
 
 target_include_directories(scheduler_core
@@ -24,7 +27,7 @@ target_include_directories(scheduler_core
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_compile_features(scheduler_core PUBLIC cxx_std_20)
+target_compile_features(scheduler_core PUBLIC cxx_std_17)
 
 if(MSVC)
     target_compile_options(scheduler_core PRIVATE /W4 /permissive-)
@@ -34,6 +37,9 @@ endif()
 
 add_executable(scheduler src/main.cpp)
 target_link_libraries(scheduler PRIVATE scheduler_core)
+
+add_executable(benchmark src/benchmark_main.cpp)
+target_link_libraries(benchmark PRIVATE scheduler_core)
 
 include(CTest)
 option(SCHEDULER_BUILD_TESTS "Build GoogleTest tests" ON)
