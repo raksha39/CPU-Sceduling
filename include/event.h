@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace scheduler {
-enum class EventType { ProcessArrival, Dispatch, Preempt, ProcessCompletion, CpuIdle };
+enum class EventType { ProcessArrival, Dispatch, Preempt, ContextSwitch, ProcessCompletion, QueueChange, Migration, CpuIdle };
 [[nodiscard]] std::string toString(EventType type);
 struct SchedulerEvent {
     Tick timestamp;

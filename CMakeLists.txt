@@ -11,9 +11,12 @@ add_library(scheduler_core
     src/cpu.cpp
     src/run_queue.cpp
     src/event.cpp
+    src/metrics.cpp
     src/simulation.cpp
     schedulers/fcfs.cpp
     schedulers/round_robin.cpp
+    schedulers/priority.cpp
+    schedulers/mlfq.cpp
 )
 
 target_include_directories(scheduler_core
@@ -54,6 +57,10 @@ if(BUILD_TESTING AND SCHEDULER_BUILD_TESTS)
         tests/simulation_test.cpp
         tests/fcfs_test.cpp
         tests/round_robin_test.cpp
+        tests/priority_test.cpp
+        tests/metrics_test.cpp
+        tests/mlfq_test.cpp
+        tests/multicore_test.cpp
     )
     target_link_libraries(scheduler_tests PRIVATE scheduler_core GTest::gtest_main)
     include(GoogleTest)

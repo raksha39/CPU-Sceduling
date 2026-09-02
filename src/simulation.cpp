@@ -7,21 +7,43 @@ namespace scheduler {
 SimulationEngine::SimulationEngine(const CpuId coreCount)
     : SimulationEngine(coreCount, std::make_unique<FcfsScheduler>()) {}
 
-SimulationEngine::SimulationEngine(const CpuId coreCount, std::unique_ptr<Scheduler> scheduler)
-    : scheduler_(std::move(scheduler)) {
+SimulationEngine::SimulationEngine(const CpuId coreCount, std::unique_ptr<Scheduler> scheduler) {
     if (coreCount == 0) throw std::invalid_argument("Simulation requires at least one CPU");
-    if (!scheduler_) throw std::invalid_argument("Simulation requires a scheduler");
+    if (!scheduler) throw std::invalid_argument("Simulation requires a scheduler");
     cpus_.reserve(coreCount);
-    for (CpuId id = 0; id < coreCount; ++id) cpus_.emplace_back(id);
+    schedulers_.reserve(coreCount);
+    for (CpuId id = 0; id < coreCount; ++id) {
+        cpus_.emplace_back(id);
+        schedulers_.push_back(id == 0 ? std::move(scheduler) : schedulers_.front()->clone());
+    }
+    lastProcessByCpu_.resize(coreCount);
 }
 
 Tick SimulationEngine::now() const noexcept { return now_; }
 const std::vector<Cpu>& SimulationEngine::cpus() const noexcept { return cpus_; }
 const std::vector<SchedulerEvent>& SimulationEngine::events() const noexcept { return events_; }
+const Scheduler& SimulationEngine::schedulerForCpu(const CpuId cpuId) const { return *schedulers_.at(cpuId); }
+MetricsSnapshot SimulationEngine::metrics() const { return Metrics::calculate(processes_); }
 
 void SimulationEngine::addProcess(std::shared_ptr<Process> process) {
     if (!process) throw std::invalid_argument("Cannot add null process");
+    static_cast<void>(placeProcess(*process));
     processes_.push_back(std::move(process));
+}
+
+CpuId SimulationEngine::placeProcess(const Process& process) const {
+    std::optional<CpuId> selected;
+    std::size_t selectedLoad = 0;
+    for (const auto& cpu : cpus_) {
+        if (!process.canRunOn(cpu.id())) continue;
+        const auto load = schedulers_.at(cpu.id())->readyCount() + (cpu.isIdle() ? 0U : 1U);
+        if (!selected || load < selectedLoad) {
+            selected = cpu.id();
+            selectedLoad = load;
+        }
+    }
+    if (!selected) throw std::invalid_argument("Process affinity excludes every simulated CPU");
+    return *selected;
 }
 
 bool SimulationEngine::hasWork() const noexcept {
@@ -35,8 +57,19 @@ void SimulationEngine::admitArrivals() {
     for (const auto& process : processes_) {
         if (process->state() == ProcessState::New && process->arrivalTime() <= now_) {
             process->transitionTo(ProcessState::Ready);
-            scheduler_->addProcess(process);
+            const auto cpuId = placeProcess(*process);
+            schedulers_.at(cpuId)->addProcess(process);
             recordEvent(EventType::ProcessArrival, process->pid(), std::nullopt);
+        }
+    }
+}
+
+void SimulationEngine::recordQueueTransitions() {
+    for (CpuId cpuId = 0; cpuId < schedulers_.size(); ++cpuId) {
+        for (auto& transition : schedulers_[cpuId]->takeQueueTransitions()) {
+            recordEvent(EventType::QueueChange, transition.processId, cpuId,
+                        "Q" + std::to_string(transition.fromLevel) + " -> Q" +
+                        std::to_string(transition.toLevel) + ": " + transition.reason);
         }
     }
 }
@@ -44,33 +77,56 @@ void SimulationEngine::admitArrivals() {
 void SimulationEngine::dispatchIdleCpus() {
     for (auto& cpu : cpus_) {
         if (!cpu.isIdle()) continue;
-        auto process = scheduler_->selectNext(cpu.id());
+        auto process = schedulers_.at(cpu.id())->selectNext(cpu.id());
         if (process) {
+            auto& lastProcess = lastProcessByCpu_.at(cpu.id());
+            if (lastProcess && *lastProcess != process->pid()) {
+                cpu.recordContextSwitch();
+                recordEvent(EventType::ContextSwitch, process->pid(), cpu.id(),
+                            "from P" + std::to_string(*lastProcess) + " to P" + std::to_string(process->pid()));
+            }
             cpu.dispatch(process, now_);
             recordEvent(EventType::Dispatch, process->pid(), cpu.id());
+            lastProcess = process->pid();
+        }
+    }
+}
+
+void SimulationEngine::preemptCpu(Cpu& cpu, std::string metadata) {
+    auto process = cpu.currentProcess();
+    process->preempt();
+    cpu.release();
+    schedulers_.at(cpu.id())->onProcessPreempt(cpu.id(), process);
+    recordEvent(EventType::Preempt, process->pid(), cpu.id(), std::move(metadata));
+    recordQueueTransitions();
+}
+
+void SimulationEngine::preemptRunningCpus() {
+    for (auto& cpu : cpus_) {
+        if (!cpu.isIdle() && schedulers_.at(cpu.id())->shouldPreempt(cpu.id(), cpu.currentProcess())) {
+            preemptCpu(cpu, "higher-priority process ready");
         }
     }
 }
 
 void SimulationEngine::advanceOneTick() {
+    for (auto& scheduler : schedulers_) scheduler->onTimeAdvance(now_);
+    recordQueueTransitions();
     admitArrivals();
+    preemptRunningCpus();
     dispatchIdleCpus();
     for (auto& cpu : cpus_) {
         if (cpu.isIdle()) continue;
         cpu.executeOneTick();
         if (cpu.currentProcess()->remainingTime() == 0) {
             cpu.currentProcess()->complete(now_ + 1);
-            scheduler_->onProcessComplete(cpu.id(), cpu.currentProcess());
+            schedulers_.at(cpu.id())->onProcessComplete(cpu.id(), cpu.currentProcess());
             recordEvent(EventType::ProcessCompletion, cpu.currentProcess()->pid(), cpu.id());
             cpu.release();
         } else {
-            scheduler_->onTick(cpu.id(), cpu.currentProcess());
-            if (scheduler_->shouldPreempt(cpu.id(), cpu.currentProcess())) {
-                auto process = cpu.currentProcess();
-                process->preempt();
-                cpu.release();
-                scheduler_->onProcessPreempt(cpu.id(), process);
-                recordEvent(EventType::Preempt, process->pid(), cpu.id(), "time quantum expired");
+            schedulers_.at(cpu.id())->onTick(now_ + 1, cpu.id(), cpu.currentProcess());
+            if (schedulers_.at(cpu.id())->shouldPreempt(cpu.id(), cpu.currentProcess())) {
+                preemptCpu(cpu, "scheduler preemption");
             }
         }
     }

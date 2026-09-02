@@ -9,7 +9,8 @@ void RoundRobinScheduler::addProcess(std::shared_ptr<Process> process) { readyQu
 std::shared_ptr<Process> RoundRobinScheduler::selectNext(const CpuId cpuId) {
     auto process = readyQueue_.dequeueEligible(cpuId); if (process) elapsedByCpu_[cpuId] = 0; return process;
 }
-void RoundRobinScheduler::onTick(const CpuId cpuId, const std::shared_ptr<Process>&) { ++elapsedByCpu_[cpuId]; }
+void RoundRobinScheduler::onTimeAdvance(Tick) {}
+void RoundRobinScheduler::onTick(Tick, const CpuId cpuId, const std::shared_ptr<Process>&) { ++elapsedByCpu_[cpuId]; }
 bool RoundRobinScheduler::shouldPreempt(const CpuId cpuId, const std::shared_ptr<Process>&) const {
     const auto it = elapsedByCpu_.find(cpuId); return it != elapsedByCpu_.end() && it->second >= quantum_;
 }
@@ -17,4 +18,8 @@ void RoundRobinScheduler::onProcessComplete(const CpuId cpuId, const std::shared
 void RoundRobinScheduler::onProcessPreempt(const CpuId cpuId, std::shared_ptr<Process> process) { elapsedByCpu_.erase(cpuId); readyQueue_.enqueue(std::move(process)); }
 void RoundRobinScheduler::onProcessWakeup(std::shared_ptr<Process> process) { readyQueue_.enqueue(std::move(process)); }
 std::size_t RoundRobinScheduler::readyCount() const noexcept { return readyQueue_.size(); }
+std::shared_ptr<Process> RoundRobinScheduler::takeMigratable(const CpuId destinationCpu) { return readyQueue_.dequeueEligible(destinationCpu); }
+void RoundRobinScheduler::acceptMigrated(std::shared_ptr<Process> process) { readyQueue_.enqueue(std::move(process)); }
+std::unique_ptr<Scheduler> RoundRobinScheduler::clone() const { return std::make_unique<RoundRobinScheduler>(quantum_); }
+std::vector<Scheduler::QueueTransition> RoundRobinScheduler::takeQueueTransitions() { return {}; }
 }  // namespace scheduler

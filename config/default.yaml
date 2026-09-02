@@ -3,3 +3,9 @@ algorithm: fcfs
 cores: 1
 processes: 10
 seed: 42
+
+# MLFQ defaults (configuration-file parsing is introduced with the CLI phase).
+mlfq:
+  quanta: [2, 4, fcfs]
+  aging_threshold: 20
+  boost_interval: 100

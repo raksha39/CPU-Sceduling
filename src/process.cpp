@@ -34,7 +34,21 @@ int Process::priority() const noexcept { return priority_; }
 ProcessState Process::state() const noexcept { return state_; }
 std::optional<Tick> Process::startTime() const noexcept { return startTime_; }
 std::optional<Tick> Process::completionTime() const noexcept { return completionTime_; }
+std::optional<Tick> Process::waitingTime() const noexcept {
+    if (!completionTime_) return std::nullopt;
+    return *completionTime_ - arrivalTime_ - burstTime_;
+}
+std::optional<Tick> Process::turnaroundTime() const noexcept {
+    if (!completionTime_) return std::nullopt;
+    return *completionTime_ - arrivalTime_;
+}
+std::optional<Tick> Process::responseTime() const noexcept {
+    if (!startTime_) return std::nullopt;
+    return *startTime_ - arrivalTime_;
+}
 std::optional<CpuId> Process::currentCpu() const noexcept { return currentCpu_; }
+std::uint32_t Process::queueLevel() const noexcept { return queueLevel_; }
+std::uint64_t Process::migrationCount() const noexcept { return migrationCount_; }
 const std::vector<CpuId>& Process::affinity() const noexcept { return affinity_; }
 bool Process::canRunOn(const CpuId cpuId) const noexcept {
     return affinity_.empty() || std::binary_search(affinity_.begin(), affinity_.end(), cpuId);
@@ -89,5 +103,8 @@ void Process::complete(const Tick now) {
     completionTime_ = now;
     currentCpu_.reset();
 }
+
+void Process::setQueueLevel(const std::uint32_t level) noexcept { queueLevel_ = level; }
+void Process::recordMigration() noexcept { ++migrationCount_; }
 
 }  // namespace scheduler

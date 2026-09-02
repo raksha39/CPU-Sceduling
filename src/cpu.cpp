@@ -9,6 +9,7 @@ CpuId Cpu::id() const noexcept { return id_; }
 bool Cpu::isIdle() const noexcept { return !currentProcess_; }
 const std::shared_ptr<Process>& Cpu::currentProcess() const noexcept { return currentProcess_; }
 Tick Cpu::busyTime() const noexcept { return busyTime_; }
+std::uint64_t Cpu::contextSwitchCount() const noexcept { return contextSwitchCount_; }
 
 void Cpu::dispatch(const std::shared_ptr<Process>& process, const Tick now) {
     if (!process) throw std::invalid_argument("Cannot dispatch null process");
@@ -27,5 +28,7 @@ void Cpu::executeOneTick() {
     currentProcess_->executeOneTick();
     ++busyTime_;
 }
+
+void Cpu::recordContextSwitch() noexcept { ++contextSwitchCount_; }
 
 }  // namespace scheduler

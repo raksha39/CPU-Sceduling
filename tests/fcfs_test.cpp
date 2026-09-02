@@ -10,7 +10,7 @@ TEST(FcfsTest, RunsTasksInArrivalThenInsertionOrderWithoutPreemption) {
     while (simulation.hasWork()) simulation.advanceOneTick();
     EXPECT_EQ(first->startTime(), 0); EXPECT_EQ(first->completionTime(), 3);
     EXPECT_EQ(second->startTime(), 3); EXPECT_EQ(second->completionTime(), 4);
-    EXPECT_EQ(simulation.events().size(), 6U);
+    EXPECT_EQ(simulation.events().size(), 7U);
     EXPECT_EQ(simulation.events()[2].type, EventType::Dispatch);
     EXPECT_EQ(simulation.events()[3].type, EventType::ProcessCompletion);
 }

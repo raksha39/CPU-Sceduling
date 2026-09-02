@@ -25,9 +25,11 @@ Load balancer / work stealing / affinity / migration -------------|
 | `Scheduler` | Policy-only abstraction for enqueueing, selection, tick accounting, preemption decisions, completion, and wakeup handling. It has no dependency on `Cpu`. |
 | `FcfsScheduler` | Non-preemptive FIFO policy. |
 | `RoundRobinScheduler` | FIFO policy with a validated, configurable positive time quantum and per-simulated-CPU slice accounting. |
-| `SimulationEngine` | Owns simulated time, CPUs, submitted processes, the selected scheduler, and an ordered event history. It admits arrivals, delegates dispatch selection, executes one tick, and invokes policy lifecycle hooks. |
+| `PriorityScheduler` | Stable priority queue policy with configurable priority direction. A strictly higher-priority, affinity-eligible READY task preempts a running task before its next simulated CPU tick. |
+| `MlfqScheduler` | Configurable multilevel feedback policy with separate FIFO queues, quantum-based demotion, aging, and periodic priority boosts. |
+| `SimulationEngine` | Owns simulated time, CPUs, submitted processes, one scheduler instance per CPU, and an ordered event history. It admits arrivals, performs deterministic initial placement, executes every core for one tick, and invokes the matching local policy hooks. |
 
-The Phase 1 first-ready placeholder has been replaced with the scheduler interface. Per-core queues are deferred to the multi-core phase; Phase 2 has one policy-owned ready queue to establish the policy contract.
+Each simulated CPU has an independent scheduler instance and therefore an independent local ready queue. Scheduler state (such as RR time slices and MLFQ queue levels) is not shared across CPUs.
 
 ## Process lifecycle
 
@@ -51,15 +53,25 @@ For every deterministic tick `t`, the engine:
 4. Marks exhausted processes TERMINATED at `t + 1`; otherwise it notifies the scheduler and applies any requested preemption.
 5. Records arrival, dispatch, preemption, and completion events, then increments the simulation clock.
 
-Future phases add wakeups, additional policies, context-switch costs, per-core queues, balancing, and work stealing.
+The event history includes arrival, dispatch, preemption, logical context-switch, and completion events. Context-switch *cost* is deferred to Phase 5. Future phases add wakeups, additional policies, per-core queues, balancing, and work stealing.
 
 ## Multi-core and affinity flow
 
-`SimulationEngine` constructs the requested number of simulated `Cpu` objects, independent of the host machine. A process with an empty affinity vector may run anywhere. Otherwise, dispatch validates that the CPU identifier belongs to its sorted affinity set. The future placement/migration layer will retain that invariant.
+`SimulationEngine` constructs the requested number of simulated `Cpu` objects, independent of the host machine. A process with an empty affinity vector may run anywhere. Otherwise, dispatch validates that the CPU identifier belongs to its sorted affinity set. At arrival, initial placement selects the affinity-eligible CPU with the least local runnable load (READY count plus a running task); ties use the lowest CPU ID. The process is then owned by that CPU's local queue. No migration, balancing, or stealing occurs in this phase.
+
+Each `Cpu` tracks its current process, busy ticks, and local logical context-switch count. Since a process is inserted into exactly one local queue and held by at most one `Cpu`, it cannot execute on more than one simulated CPU at a time.
 
 ## Intended scheduling flow
 
-Schedulers use a policy-only interface: enqueue/add process, select next, tick notification, preemption decision, completion, preemption, and wakeup handling. CPUs remain policy-agnostic. FCFS and Round Robin are implemented; Priority and MLFQ follow in later phases.
+Schedulers use a policy-only interface: enqueue/add process, select next, tick notification, preemption decision, completion, preemption, and wakeup handling. CPUs remain policy-agnostic. FCFS, Round Robin, preemptive Priority, and MLFQ are implemented.
+
+## MLFQ design
+
+The default MLFQ has three FIFO queues: Q0 uses quantum 2, Q1 uses quantum 4, and Q2 is FCFS. New tasks enter Q0. When a task consumes an entire finite quantum, it is requeued one level lower; Q2 cannot be demoted further. A ready task in a higher queue preempts a lower-queue running task.
+
+An interactive task that blocks or voluntarily yields before its quantum expires retains its current queue on wakeup. This rewards short/interactive bursts without promoting a task merely for blocking. (The simulated I/O blocking source is introduced in a later phase; the scheduler hook and policy are already defined.)
+
+`agingThreshold` promotes a READY task by one queue after it has waited that many simulated ticks; zero disables aging. `boostInterval` moves every READY task from lower queues to Q0 at each positive interval; zero disables boosts. Both mechanisms prevent indefinite starvation. Queue transitions are emitted as `QUEUE_CHANGE` events with a reason. FIFO insertion order makes equal-level selection deterministic.
 
 ## Load balancing, stealing, and migration (planned)
 
