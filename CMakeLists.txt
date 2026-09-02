@@ -61,6 +61,10 @@ if(BUILD_TESTING AND SCHEDULER_BUILD_TESTS)
         tests/metrics_test.cpp
         tests/mlfq_test.cpp
         tests/multicore_test.cpp
+        tests/affinity_test.cpp
+        tests/migration_test.cpp
+        tests/load_balancer_test.cpp
+        tests/work_stealing_test.cpp
     )
     target_link_libraries(scheduler_tests PRIVATE scheduler_core GTest::gtest_main)
     include(GoogleTest)

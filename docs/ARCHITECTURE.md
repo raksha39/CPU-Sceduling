@@ -61,6 +61,16 @@ The event history includes arrival, dispatch, preemption, logical context-switch
 
 Each `Cpu` tracks its current process, busy ticks, and local logical context-switch count. Since a process is inserted into exactly one local queue and held by at most one `Cpu`, it cannot execute on more than one simulated CPU at a time.
 
+## Affinity, migration, and balancing
+
+An empty affinity set means unrestricted placement. A restricted task is only placed, dispatched, stolen, or migrated to a listed CPU. An affinity set that excludes every simulated CPU is rejected when the task is submitted.
+
+Migration moves a READY task from one local scheduler queue to another after affinity validation. It updates the task and simulation migration counters, accumulates configurable migration overhead, and emits a `MIGRATION` event. Migration overhead is accounting-only in this phase; CPU stall time is intentionally deferred to the later timing-overhead model.
+
+Centralized load balancing and work stealing are independent switches in `MultiCoreSchedulingConfig`. Centralized balancing runs at `balanceInterval` and uses `READY queue length + running task` as CPU load. While the difference between most- and least-loaded cores exceeds one, it migrates an affinity-eligible READY task. `loadImbalance()` is the current max-minus-min value of that metric.
+
+Work stealing only considers idle CPUs with empty local queues. Such a CPU chooses the victim with the largest non-empty ready queue (lowest CPU ID breaks ties), steals the first affinity-eligible task according to that victim's policy, then dispatches it locally. This phase does not migrate running tasks.
+
 ## Intended scheduling flow
 
 Schedulers use a policy-only interface: enqueue/add process, select next, tick notification, preemption decision, completion, preemption, and wakeup handling. CPUs remain policy-agnostic. FCFS, Round Robin, preemptive Priority, and MLFQ are implemented.

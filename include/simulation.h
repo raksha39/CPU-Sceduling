@@ -37,6 +37,8 @@ public:
     [[nodiscard]] bool hasWork() const noexcept;
 
     void addProcess(std::shared_ptr<Process> process);
+    // Moves one READY affinity-eligible task; returns false when no such task exists.
+    bool migrateReadyTask(CpuId sourceCpu, CpuId destinationCpu, std::string reason = "manual migration");
     void advanceOneTick();
 
 private:
@@ -48,7 +50,6 @@ private:
     void preemptCpu(Cpu& cpu, std::string metadata);
     void recordQueueTransitions();
     [[nodiscard]] CpuId placeProcess(const Process& process) const;
-    bool migrateReadyTask(CpuId sourceCpu, CpuId destinationCpu, std::string reason);
     void recordEvent(EventType type, std::optional<ProcessId> processId,
                      std::optional<CpuId> cpuId, std::string metadata = {});
 

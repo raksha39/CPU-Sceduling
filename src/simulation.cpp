@@ -7,9 +7,17 @@ namespace scheduler {
 SimulationEngine::SimulationEngine(const CpuId coreCount)
     : SimulationEngine(coreCount, std::make_unique<FcfsScheduler>()) {}
 
-SimulationEngine::SimulationEngine(const CpuId coreCount, std::unique_ptr<Scheduler> scheduler) {
+SimulationEngine::SimulationEngine(const CpuId coreCount, std::unique_ptr<Scheduler> scheduler)
+    : SimulationEngine(coreCount, std::move(scheduler), {}) {}
+
+SimulationEngine::SimulationEngine(const CpuId coreCount, std::unique_ptr<Scheduler> scheduler,
+                                   MultiCoreSchedulingConfig config)
+    : schedulingConfig_(config) {
     if (coreCount == 0) throw std::invalid_argument("Simulation requires at least one CPU");
     if (!scheduler) throw std::invalid_argument("Simulation requires a scheduler");
+    if (schedulingConfig_.loadBalancingEnabled && schedulingConfig_.balanceInterval == 0) {
+        throw std::invalid_argument("Load balancing requires a positive balance interval");
+    }
     cpus_.reserve(coreCount);
     schedulers_.reserve(coreCount);
     for (CpuId id = 0; id < coreCount; ++id) {
@@ -24,6 +32,25 @@ const std::vector<Cpu>& SimulationEngine::cpus() const noexcept { return cpus_; 
 const std::vector<SchedulerEvent>& SimulationEngine::events() const noexcept { return events_; }
 const Scheduler& SimulationEngine::schedulerForCpu(const CpuId cpuId) const { return *schedulers_.at(cpuId); }
 MetricsSnapshot SimulationEngine::metrics() const { return Metrics::calculate(processes_); }
+const MultiCoreSchedulingConfig& SimulationEngine::schedulingConfig() const noexcept { return schedulingConfig_; }
+std::uint64_t SimulationEngine::migrationCount() const noexcept { return migrationCount_; }
+Tick SimulationEngine::migrationOverhead() const noexcept { return migrationOverhead_; }
+
+std::size_t SimulationEngine::load(const CpuId cpuId) const {
+    const auto& cpu = cpus_.at(cpuId);
+    return schedulers_.at(cpuId)->readyCount() + (cpu.isIdle() ? 0U : 1U);
+}
+
+std::size_t SimulationEngine::loadImbalance() const {
+    if (cpus_.empty()) return 0;
+    auto minimum = load(0);
+    auto maximum = minimum;
+    for (CpuId cpuId = 1; cpuId < cpus_.size(); ++cpuId) {
+        minimum = std::min(minimum, load(cpuId));
+        maximum = std::max(maximum, load(cpuId));
+    }
+    return maximum - minimum;
+}
 
 void SimulationEngine::addProcess(std::shared_ptr<Process> process) {
     if (!process) throw std::invalid_argument("Cannot add null process");
@@ -44,6 +71,23 @@ CpuId SimulationEngine::placeProcess(const Process& process) const {
     }
     if (!selected) throw std::invalid_argument("Process affinity excludes every simulated CPU");
     return *selected;
+}
+
+bool SimulationEngine::migrateReadyTask(const CpuId sourceCpu, const CpuId destinationCpu, std::string reason) {
+    if (sourceCpu >= cpus_.size() || destinationCpu >= cpus_.size()) {
+        throw std::out_of_range("Migration CPU identifier is out of range");
+    }
+    if (sourceCpu == destinationCpu) return false;
+    auto process = schedulers_.at(sourceCpu)->takeMigratable(destinationCpu);
+    if (!process) return false;
+    if (!process->canRunOn(destinationCpu)) throw std::logic_error("Migration violates process affinity");
+    schedulers_.at(destinationCpu)->acceptMigrated(process);
+    process->recordMigration();
+    ++migrationCount_;
+    migrationOverhead_ += schedulingConfig_.migrationCost;
+    recordEvent(EventType::Migration, process->pid(), sourceCpu,
+                "to CPU" + std::to_string(destinationCpu) + ": " + std::move(reason));
+    return true;
 }
 
 bool SimulationEngine::hasWork() const noexcept {
@@ -109,11 +153,45 @@ void SimulationEngine::preemptRunningCpus() {
     }
 }
 
+void SimulationEngine::performLoadBalancing() {
+    if (!schedulingConfig_.loadBalancingEnabled || now_ == 0 ||
+        now_ % schedulingConfig_.balanceInterval != 0) return;
+
+    while (true) {
+        CpuId source = 0;
+        CpuId destination = 0;
+        for (CpuId cpuId = 1; cpuId < cpus_.size(); ++cpuId) {
+            if (load(cpuId) > load(source)) source = cpuId;
+            if (load(cpuId) < load(destination)) destination = cpuId;
+        }
+        if (load(source) <= load(destination) + 1) return;
+        if (!migrateReadyTask(source, destination, "centralized load balancing")) return;
+    }
+}
+
+void SimulationEngine::performWorkStealing() {
+    if (!schedulingConfig_.workStealingEnabled) return;
+    for (const auto& idleCpu : cpus_) {
+        if (!idleCpu.isIdle() || schedulers_.at(idleCpu.id())->readyCount() != 0) continue;
+        std::optional<CpuId> victim;
+        for (const auto& candidate : cpus_) {
+            if (candidate.id() == idleCpu.id() || schedulers_.at(candidate.id())->readyCount() == 0) continue;
+            if (!victim || schedulers_.at(candidate.id())->readyCount() > schedulers_.at(*victim)->readyCount()) {
+                victim = candidate.id();
+            }
+        }
+        if (victim) migrateReadyTask(*victim, idleCpu.id(), "work stealing");
+    }
+}
+
 void SimulationEngine::advanceOneTick() {
     for (auto& scheduler : schedulers_) scheduler->onTimeAdvance(now_);
     recordQueueTransitions();
     admitArrivals();
     preemptRunningCpus();
+    performLoadBalancing();
+    dispatchIdleCpus();
+    performWorkStealing();
     dispatchIdleCpus();
     for (auto& cpu : cpus_) {
         if (cpu.isIdle()) continue;
