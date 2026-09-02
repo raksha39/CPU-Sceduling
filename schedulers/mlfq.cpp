@@ -132,6 +132,25 @@ std::size_t MlfqScheduler::readyCount() const noexcept {
     return count;
 }
 
+std::shared_ptr<Process> MlfqScheduler::takeMigratable(const CpuId destinationCpu) {
+    for (auto& queue : queues_) {
+        for (auto it = queue.begin(); it != queue.end(); ++it) {
+            if ((*it)->canRunOn(destinationCpu)) {
+                auto process = std::move(*it);
+                queue.erase(it);
+                readySince_.erase(process->pid());
+                return process;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void MlfqScheduler::acceptMigrated(std::shared_ptr<Process> process) {
+    const auto level = process->queueLevel();
+    enqueue(std::move(process), level, now_);
+}
+
 std::unique_ptr<Scheduler> MlfqScheduler::clone() const { return std::make_unique<MlfqScheduler>(config_); }
 
 std::vector<Scheduler::QueueTransition> MlfqScheduler::takeQueueTransitions() {
